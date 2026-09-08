@@ -1,0 +1,23 @@
+# Variáveis e segredos
+.env
+.env.*
+secrets/
+credentials/
+
+# Chaves e certificados
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Arquivos temporários
+*.log
+*.tmp
+*.swp
+
+# VS Code
+.vscode/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
