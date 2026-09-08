@@ -193,15 +193,11 @@ Todos os testes foram concluídos com sucesso.
 
 ## Motivo para não utilizar External Switch
 
-O computador utilizado no laboratório está conectado a uma rede corporativa.
+Foi utilizado um switch do tipo `Internal` para manter o laboratório isolado e com maior controle sobre o endereçamento e o tráfego das VMs.
 
-Por esse motivo, as VMs não foram conectadas diretamente à rede física da empresa.
-
-A arquitetura escolhida mantém o laboratório isolado:
+O acesso externo é realizado por NAT através do host.
 
 ```text
-Rede corporativa
-       |
 Windows Host
        |
       NAT
@@ -212,6 +208,3 @@ LAB-INFRA
        +-- APP01
        +-- APP02
        +-- DB01
-```
-
-Isso reduz o risco de interferência na rede corporativa e mantém o laboratório controlado.
