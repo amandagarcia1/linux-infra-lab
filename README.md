@@ -1,6 +1,6 @@
 # Linux Infra Lab
 
-Laboratório prático de infraestrutura Linux com foco em aprendizado de:
+Laboratório prático de infraestrutura Linux com foco em aprimoramento de:
 
 - Linux
 - Hyper-V
