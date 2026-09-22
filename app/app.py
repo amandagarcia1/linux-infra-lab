@@ -4,9 +4,15 @@ import socket
 import psycopg
 from psycopg.rows import dict_row
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 
 app = FastAPI(title="Linux Infra Lab")
+
+
+class RecordCreate(BaseModel):
+    origem: str
+    mensagem: str
 
 
 def get_db_connection():
@@ -71,6 +77,31 @@ def get_records():
                 records = cur.fetchall()
 
         return records
+
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Database unavailable",
+        )
+
+
+@app.post("/records", status_code=201)
+def create_record(record: RecordCreate):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    INSERT INTO lab_test (origem, mensagem)
+                    VALUES (%s, %s)
+                    RETURNING id, origem, mensagem, criado_em
+                    """,
+                    (record.origem, record.mensagem),
+                )
+
+                new_record = cur.fetchone()
+
+        return new_record
 
     except Exception:
         raise HTTPException(
