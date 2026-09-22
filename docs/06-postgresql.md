@@ -1,6 +1,6 @@
 # PostgreSQL
 
-Este documento descreve a instalação, configuração e validação do PostgreSQL no servidor `DB01`.
+Este documento descreve a instalação, configuração, validação, backup e restauração do PostgreSQL no servidor `DB01`.
 
 ## Objetivo
 
@@ -193,8 +193,6 @@ A aplicação não utiliza a role administrativa `postgres`.
 
 Isso reduz o nível de privilégio disponível para a aplicação.
 
-No PostgreSQL, roles com `LOGIN` podem ser utilizadas para autenticação, enquanto uma role `SUPERUSER` pode ignorar praticamente todas as verificações de permissão. Por isso foi utilizada uma role comum para a aplicação. :contentReference[oaicite:0]{index=0}
-
 ## Banco da aplicação
 
 Foi criado:
@@ -215,8 +213,6 @@ Comando:
 CREATE DATABASE linuxinfra
 OWNER linuxinfra_app;
 ```
-
-O proprietário de um banco possui controle sobre aquele banco, sem necessidade de tornar a role superusuária. :contentReference[oaicite:1]{index=1}
 
 ## Validação
 
@@ -320,8 +316,6 @@ listen_addresses = '10.10.10.30'
 
 Isso faz com que o PostgreSQL escute especificamente no endereço interno do DB01.
 
-O PostgreSQL permite controlar em quais interfaces TCP/IP o servidor aceita conexões através de `listen_addresses`. :contentReference[oaicite:2]{index=2}
-
 Depois da alteração:
 
 ```bash
@@ -395,8 +389,6 @@ utilizando autenticação:
 ```text
 SCRAM-SHA-256
 ```
-
-O PostgreSQL processa as regras do `pg_hba.conf` para definir quais clientes, bancos, roles e métodos de autenticação são permitidos. O método `scram-sha-256` utiliza autenticação baseada em senha SCRAM-SHA-256. :contentReference[oaicite:3]{index=3}
 
 ## Uso de /32
 
@@ -700,6 +692,66 @@ APP02 FastAPI
  PostgreSQL
 ```
 
+## Endpoints de leitura e escrita
+
+A aplicação também passou a disponibilizar:
+
+```text
+GET /records
+POST /records
+```
+
+O `GET /records` permite consultar os registros da tabela `lab_test`.
+
+O `POST /records` permite criar registros utilizando a API.
+
+Esses endpoints foram validados em:
+
+```text
+APP01
+APP02
+PROXY01
+```
+
+Foi criado um registro diretamente pelo APP01:
+
+```text
+id: 3
+origem: app01
+mensagem: Registro criado pela API no APP01
+```
+
+E outro registro através do PROXY01:
+
+```text
+id: 4
+origem: proxy
+mensagem: Registro criado via PROXY01
+```
+
+Depois, o `GET /records` executado através do PROXY01 retornou todos os registros do banco.
+
+Isso confirmou o fluxo completo:
+
+```text
+Cliente
+   |
+   v
+PROXY01
+   |
+   v
+APP01 ou APP02
+   |
+   v
+FastAPI
+   |
+   v
+Psycopg
+   |
+   v
+PostgreSQL
+```
+
 ## Segurança atual
 
 Foram aplicadas as seguintes medidas:
@@ -735,18 +787,270 @@ resulta em indisponibilidade das operações dependentes do banco.
 
 O balanceamento entre APP01 e APP02 não elimina esse ponto único de falha.
 
+# Backup e restauração
+
+Foi realizado um teste completo de backup lógico e restauração do banco `linuxinfra`.
+
+O objetivo não foi apenas gerar um arquivo de backup, mas validar que ele poderia ser restaurado corretamente.
+
+## Backup lógico com pg_dump
+
+Foi utilizado o `pg_dump` em formato customizado:
+
+```bash
+sudo -u postgres pg_dump \
+  -Fc \
+  -d linuxinfra \
+  -f /tmp/linuxinfra-2026-09-22.dump
+```
+
+O parâmetro:
+
+```text
+-Fc
+```
+
+utiliza o formato customizado do PostgreSQL.
+
+Esse formato é apropriado para uso com `pg_restore` e permite maior flexibilidade durante a restauração, incluindo seleção de objetos do backup.
+
+Depois o arquivo foi movido para:
+
+```text
+~/backups/postgresql/linuxinfra-2026-09-22.dump
+```
+
+## Inspeção do backup
+
+Antes da restauração, o conteúdo do arquivo foi validado com:
+
+```bash
+pg_restore -l \
+  ~/backups/postgresql/linuxinfra-2026-09-22.dump
+```
+
+O archive continha:
+
+```text
+TABLE public lab_test
+SEQUENCE public lab_test_id_seq
+DEFAULT public lab_test id
+TABLE DATA public lab_test
+SEQUENCE SET public lab_test_id_seq
+CONSTRAINT public lab_test lab_test_pkey
+```
+
+Também foi confirmado:
+
+```text
+Database: linuxinfra
+PostgreSQL: 17.11
+Format: CUSTOM
+Compression: gzip
+```
+
+## Banco temporário de restauração
+
+Para evitar qualquer alteração no banco original, foi criado:
+
+```text
+linuxinfra_restore_test
+```
+
+com owner:
+
+```text
+linuxinfra_app
+```
+
+Comando:
+
+```bash
+sudo -u postgres createdb \
+  -O linuxinfra_app \
+  linuxinfra_restore_test
+```
+
+Validação:
+
+```bash
+sudo -u postgres psql -lqt | grep linuxinfra_restore_test
+```
+
+## Permissão para leitura do dump
+
+Durante o primeiro teste, o `pg_restore` executado como usuário `postgres` não conseguiu acessar diretamente o arquivo armazenado dentro do diretório pessoal:
+
+```text
+/home/amandasilveira/backups/postgresql/
+```
+
+O erro observado foi:
+
+```text
+Permission denied
+```
+
+Para o teste, o arquivo foi copiado temporariamente para:
+
+```text
+/tmp/linuxinfra-2026-09-22.dump
+```
+
+e recebeu permissão de leitura:
+
+```bash
+cp ~/backups/postgresql/linuxinfra-2026-09-22.dump /tmp/
+
+chmod 644 /tmp/linuxinfra-2026-09-22.dump
+```
+
+O backup original foi mantido sem alterações.
+
+## Restauração
+
+O backup foi restaurado no banco temporário utilizando:
+
+```bash
+sudo -u postgres pg_restore \
+  --exit-on-error \
+  -d linuxinfra_restore_test \
+  /tmp/linuxinfra-2026-09-22.dump
+```
+
+A opção:
+
+```text
+--exit-on-error
+```
+
+faz o processo interromper caso seja encontrado algum erro durante a restauração.
+
+A restauração foi concluída sem erros.
+
+## Validação dos dados restaurados
+
+Depois da restauração:
+
+```bash
+sudo -u postgres psql -d linuxinfra_restore_test
+```
+
+Foi executada:
+
+```sql
+SELECT id, origem, mensagem, criado_em
+FROM lab_test
+ORDER BY id;
+```
+
+Resultado:
+
+```text
+ id | origem |             mensagem
+----+--------+-----------------------------------
+  1 | app01  | Registro criado pelo APP01
+  2 | app02  | Registro criado pelo APP02
+  3 | app01  | Registro criado pela API no APP01
+  4 | proxy  | Registro criado via PROXY01
+```
+
+Os quatro registros existentes no momento do backup foram recuperados corretamente.
+
+## Validação da sequência
+
+Também foi validada a sequência utilizada pela coluna `id`:
+
+```sql
+SELECT last_value
+FROM lab_test_id_seq;
+```
+
+Resultado:
+
+```text
+4
+```
+
+Isso confirmou que a sequência foi restaurada juntamente com os dados.
+
+## Resultado do teste
+
+O fluxo validado foi:
+
+```text
+linuxinfra
+    |
+    v
+pg_dump
+    |
+    v
+arquivo .dump
+    |
+    v
+pg_restore
+    |
+    v
+linuxinfra_restore_test
+    |
+    v
+validação dos dados
+```
+
+Foram comprovados:
+
+- geração do backup;
+- leitura do archive;
+- preservação da estrutura da tabela;
+- restauração dos dados;
+- restauração da chave primária;
+- restauração da sequência;
+- recuperação dos registros existentes no momento do backup.
+
+## Limpeza do ambiente de teste
+
+Após a validação, o banco temporário pode ser removido:
+
+```bash
+sudo -u postgres dropdb linuxinfra_restore_test
+```
+
+E a cópia temporária do arquivo:
+
+```bash
+rm /tmp/linuxinfra-2026-09-22.dump
+```
+
+O backup original permanece armazenado em:
+
+```text
+~/backups/postgresql/linuxinfra-2026-09-22.dump
+```
+
+## Considerações importantes
+
+O `pg_dump` realiza backup lógico de um banco individual.
+
+Ele não representa, por si só, uma estratégia completa de alta disponibilidade ou recuperação contínua.
+
+Etapas futuras poderão incluir:
+
+- automatização dos backups;
+- política de retenção;
+- armazenamento dos backups fora do DB01;
+- testes periódicos de restauração;
+- backup de roles e objetos globais;
+- WAL archiving;
+- Point-in-Time Recovery.
+
 ## Próxima evolução
 
-A sequência planejada para a camada de banco é:
+As etapas de backup e restauração já foram validadas.
+
+A próxima evolução da camada de banco será:
 
 ```text
 DB01
-  |
-  v
-backup
-  |
-  v
-restore test
   |
   v
 DB02
@@ -755,18 +1059,24 @@ DB02
 replicação
   |
   v
+primary / standby
+  |
+  v
 failover
   |
   v
-HA
+alta disponibilidade
 ```
 
 ## Evoluções futuras
 
 Estão previstas:
 
-- backup do PostgreSQL;
-- teste de restauração;
+- automatização dos backups;
+- política de retenção;
+- armazenamento de backups fora do DB01;
+- testes periódicos de restauração;
+- backup de roles e objetos globais;
 - criação do `DB02`;
 - replicação PostgreSQL;
 - estudo de primary/standby;
@@ -776,7 +1086,8 @@ Estão previstas:
 - observabilidade do banco;
 - métricas PostgreSQL;
 - alertas;
-- testes de indisponibilidade;
+- WAL archiving;
+- Point-in-Time Recovery;
 - políticas mais rígidas de TLS;
 - revisão de privilégios da aplicação.
 
@@ -801,4 +1112,19 @@ APP01 - 10.10.10.21
 APP02 - 10.10.10.22
 ```
 
-A comunicação, autenticação, leitura, escrita e persistência compartilhada foram validadas com sucesso.
+Atualmente foram validados:
+
+- comunicação e autenticação;
+- leitura e escrita;
+- persistência compartilhada;
+- integração com FastAPI;
+- `GET /records`;
+- `POST /records`;
+- acesso através do PROXY01;
+- backup lógico;
+- inspeção do backup;
+- restauração em banco temporário;
+- validação dos dados restaurados;
+- validação da sequência.
+
+O próximo objetivo da camada de banco é implementar um segundo servidor PostgreSQL e estudar replicação e failover.
